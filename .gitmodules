@@ -1,0 +1,3 @@
+[submodule "external/86Box"]
+	path = external/86Box
+	url = https://github.com/86Box/86Box.git
