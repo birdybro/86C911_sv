@@ -1,0 +1,12 @@
+# Verilator build / sim output
+sim/verilator/*/
+!sim/verilator/.gitkeep
+sim/cocotb/__pycache__/
+sim/cocotb/*.xml
+sim/cocotb/results.xml
+
+# Common
+*.swp
+*.bak
+.DS_Store
+Thumbs.db

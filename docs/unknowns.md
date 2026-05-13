@@ -12,25 +12,22 @@ Status legend:
 
 ## Chip identity / readback
 
-### U-1 — Chip ID byte returned by CR30 / CR2D-CR2F
+### ~~U-1~~ — Chip ID byte returned by CR30 / CR2D-CR2F — **RESOLVED**
 
-- **What** — The exact byte(s) the 86C911 returns when software reads CR30 (or CR2D/CR2E/CR2F on some S3 variants) as a chip-identification probe.
-- **Why** — Drivers and BIOS check this to dispatch the correct chip-specific code path; getting it wrong means drivers may refuse to bind.
-- **Where to look** — 86Box `vid_s3.c` `s3_init()` or wherever `crtc[0x30]` is initialized; original S3 86C911 datasheet (not yet located); cross-check with XFree86 `s3` driver source which has chip-detection logic.
-- **Status** — OPEN. WebFetch did not return that section of vid_s3.c. Next step: targeted grep via `gh api` or local clone.
+- Resolution: `s3->id = s3->id_ext = 0x81` for both `S3_ORCHID_86C911` and `S3_DIAMOND_STEALTH_VRAM` (`vid_s3.c:11800`). CR30 returns `0xFF` when locked, else `0x81`. CR2E returns `0x81`. See `source_traceability.md` for the full citation.
 
-### U-2 — Unlock-key values for CR38 and CR39
+### ~~U-2~~ — Unlock-key values for CR38 and CR39 — **RESOLVED**
 
-- **What** — Commonly cited as CR38 = 0x48 and CR39 = 0xA5 across the S3 family. Confirm this holds on 86C911 specifically (first-gen chips occasionally diverge).
-- **Why** — Without correct unlock, no extended register is writable; everything past Phase 4 stalls.
-- **Where** — 86Box source; S3 family datasheets (Trio64 datasheet is public and well-documented as a *reference point only*; 86C911 datasheet would be authoritative).
-- **Status** — PARTIAL (broadly known across family).
+- Resolution: precise predicates from `vid_s3.c:3184-3188`:
+  - CR20–CR3F (except CR36/38/39) writable when `(CR38 & 0xCC) == 0x48`.
+  - CR40+ writable when `(CR39 & 0xE0) == 0xA0`.
+  - CR36 writable only when `CR39 == 0xA5` exactly.
+  - On 86C911/86C924 (`chip <= S3_86C924`), CR50+ writes are silently dropped regardless of CR39 — those registers do not exist on this chip.
+- Note: simple "write 0x48 to CR38 and 0xA5 to CR39" is what software does, but our RTL must implement the mask form to match real behavior on probe sequences.
 
-### U-3 — Which RAMDAC variant 86C911 boards used in practice
+### ~~U-3~~ — RAMDAC variant — **RESOLVED**
 
-- **What** — 86Box exposes a `ramdac_type` enum but does not (in the fetched portion) tie a specific variant to 86C911. Real Orchid Fahrenheit / Diamond Stealth boards may have used different DACs (BT484 / SC11483 / etc.). Determines 6-bit vs 8-bit palette.
-- **Why** — Affects DAC port behavior (the "secret" command-mode unlock via 4-read-of-3C6) and palette width.
-- **Status** — OPEN. Decision needed: parameterise (let user select), or pick one as default. Recommendation: parameter, default "BUILT_IN" (legacy 6-bit) for max compatibility.
+- Resolution: 86C911 cards use **Sierra SC11483** (`ramdac_type = SC1148X`, `vid_s3.c:11806-11807`). Clock generator differs by board: Orchid → **AvaSem/IMI AV9194**; Diamond Stealth → **IC Designs ICD2061A** with 14.318184 MHz reference. We will model these as pluggable units behind a `dac_if` / `clkgen_if`, defaulting to SC11483 + AV9194 (Orchid).
 
 ---
 
@@ -110,16 +107,20 @@ Status legend:
 
 ## BIOS / software
 
-### U-15 — Which video BIOS images target 86C911 specifically
+### U-15 — Which video BIOS images target 86C911 specifically — **PARTIALLY RESOLVED**
 
-- **What** — `ROM_ORCHID_86C911` = `"roms/video/s3/BIOS.BIN"` is the filename macro. The actual ROM is copyrighted and not bundled. Multiple board vendors had different BIOSes (Orchid Fahrenheit, Diamond Stealth VRAM, Genoa 8400/8800).
-- **Why** — Driver/BIOS pairs are tested combinations — see issue #4730. We do not ship images.
-- **Status** — Documented. User connects an externally-supplied ROM image via the ROM port.
+- ROM size is **32 KB** at base **0xC0000** with mask **0x7FFF** (`vid_s3.c:11634`). Decode window: C0000–C7FFF.
+- Multiple board vendors had different BIOSes (Orchid Fahrenheit, Diamond Stealth VRAM, Genoa 8400/8800). We do not bundle images.
+- Status: ROM window/size resolved. ROM image selection remains user-supplied via the external ROM port.
 
-### U-16 — `device_t` init parameters
+### ~~U-16~~ — `device_t` init parameters — **RESOLVED**
 
-- **What** — `mem_size`, default `ramdac_type`, IRQ default, MMIO base for the 86C911 `device_t` — not visible in the fetched portion of vid_s3.c.
-- **Status** — OPEN. Mostly cosmetic for RTL (we parameterise everything), but useful for the compatibility matrix.
+- VRAM mask `0x000FFFFF` (1 MB), `decode_mask = (1<<20)-1` (`vid_s3.c:11799`).
+- BIOS at `0xC0000`, 32 KB (`vid_s3.c:11634`).
+- RAMDAC: SC11483.
+- Clock gen: AV9194 (Orchid) / ICD2061A (Diamond).
+- `packed_mmio = 0` on 86C911 (`vid_s3.c:11804`).
+- IRQ default not constrained by silicon; remains board-jumpered. We will expose as a top-level parameter.
 
 ---
 

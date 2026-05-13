@@ -26,23 +26,34 @@ Maps each planned behavior to a public source. Each entry has:
 | **OSDev VGA** | https://wiki.osdev.org/VGA_Hardware | Baseline VGA memory plane / mode / sequencer behavior. |
 | **8514/A** | IBM 8514/A POS docs (public) | Origin of the legacy accelerator port layout the 86C911 inherits (xx2E8 family). |
 
-## Confirmed facts (from 86Box vid_s3.c, this fetch)
+## Confirmed facts (grounded in local `external/86Box/src/video/vid_s3.c`)
 
-These items are grounded enough to be `high` confidence at the constant-value level. Behavior implications remain `medium` until tested.
-
-| Item | Value | Reference | Confidence |
+| Item | Value | Reference | Conf |
 |---|---|---|---|
-| Chip enum constant | `S3_86C911 = 0x00` | `vid_s3.c` enum near top of file | high |
-| Orchid card variant enum | `S3_ORCHID_86C911` | `vid_s3.c` | high |
-| BIOS ROM filename macro | `"roms/video/s3/BIOS.BIN"` | `vid_s3.c:ROM_ORCHID_86C911` | high |
-| ISA timing struct | `write_b=4, write_w=4, write_l=5; read_b=20, read_w=20, read_l=35; type=VIDEO_ISA` | `vid_s3.c:timing_s3_86c911` | high (as emulator's profile, not silicon) |
-| Status/IRQ bit map | `INT_VSY=bit0, INT_GE_BSY=bit1, INT_FIFO_OVR=bit2, INT_FIFO_EMP=bit3, mask=0xF` | `vid_s3.c:#define INT_*` | high |
-| CMD register decode (selected bits) | `bit 0x100 = CPU source; bit 0x1000 = byte order; bits[10:9] (0x600) = pixel size: 00=8b, 200=16b, 400=32b, 600=mono` | `vid_s3.c:s3_accel_out_fifo` switch | medium (matches 8514/A; verify against datasheet) |
-| MULTIFUNC_CNTL layout | `[15:12] = index; [11:0] = data` | `vid_s3.c` | high |
-| MULTIFUNC sub-indices noted | `0x0A = PIX_CNTL, 0x0E = MISC, 0x0F = READ_SEL` (others exist) | `vid_s3.c:multifunc[]` | medium |
-| CRTC ext index for FIFO enable | `CR40` | `vid_s3.c:s3_enable_fifo` references `svga->crtc[0x40]` | medium |
-| CRTC ext index for packed-MMIO / high-color | `CR53` | `vid_s3.c` | medium |
-| RAMDAC type enum | `BUILT_IN, SC1148X, SC1502X, ATT49X, ATT498, BT48X, IBM_RGB, S3_SDAC, TVP3026` | `vid_s3.c:s3_ramdac_type` | high (enum names); 86C911-specific selection still unknown |
+| Chip enum constant | `S3_86C911 = 0x00` | `vid_s3.c:137` | H |
+| Orchid card variant enum | `S3_ORCHID_86C911` | `vid_s3.c:103` | H |
+| BIOS ROM filename macro | `"roms/video/s3/BIOS.BIN"` | `vid_s3.c:47` | H |
+| ISA timing struct | `write_b=4, write_w=4, write_l=5; read_b=20, read_w=20, read_l=35; type=VIDEO_ISA` | `vid_s3.c:154 timing_s3_86c911` | H (emulator profile) |
+| **86C911 chip-ID byte** | `0x81` (used for both `s3->id` and `s3->id_ext`) | `vid_s3.c:11800 stepping=0x81; /*86C911*/` | **H** — retires U-1 |
+| 86C924 chip-ID byte | `0x82` | `vid_s3.c:11822` | H |
+| **CR38 unlock predicate** | `(crtc[0x38] & 0xCC) == 0x48` — bits 7:6=01, bits 3:2=10; writing `0x48` works | `vid_s3.c:3184` | **H** — retires U-2 part 1 |
+| **CR39 unlock predicate (CR40+)** | `(crtc[0x39] & 0xE0) == 0xA0` — bits 7:5=101; writing `0xA0` or `0xA5` works | `vid_s3.c:3186` | **H** — retires U-2 part 2 |
+| **CR36 unlock predicate (special)** | `crtc[0x39] == 0xA5` exactly | `vid_s3.c:3188` | H |
+| **CR30 read** (chip ID readback) | returns `0xFF` if CR38 locked; else `s3->id` (`0x81` on 86C911) | `vid_s3.c:3559-3560` | H |
+| **CR2E read** | `s3->id_ext` (also `0x81`) | `vid_s3.c:3548-3549` | H |
+| Pre-86C928 CR50+ writes locked out | `if (s3->chip <= S3_86C924 && crtcreg >= 0x50) return;` — CR50+ are no-op on 86C911 | `vid_s3.c:3190` | H |
+| **86C911 RAMDAC** | `sc11483_ramdac_device` (Sierra SC11483) → `ramdac_type = SC1148X` | `vid_s3.c:11806-11807` | **H** — retires U-3 |
+| **86C911 clock gen (Orchid)** | `av9194_device` (AvaSem/IMI AV9194) | `vid_s3.c:11808-11810` | H |
+| 86C911 clock gen (Diamond Stealth) | `icd2061_device` w/ 14.318184 MHz ref | `vid_s3.c:11812-11815` | H |
+| **VRAM decode mask** | `(1<<20) - 1 = 0x000FFFFF` (1 MB) | `vid_s3.c:11799 svga->decode_mask` | H |
+| **BIOS ROM init** | base `0xC0000`, size `0x8000` (32 KB), mask `0x7FFF`, external mem mapping | `vid_s3.c:11634 rom_init(...)` | **H** — retires U-15 ROM size |
+| Status/IRQ bit map | `INT_VSY=bit0, INT_GE_BSY=bit1, INT_FIFO_OVR=bit2, INT_FIFO_EMP=bit3, mask=0xF` | `vid_s3.c #define INT_*` | H |
+| CMD bits (grounded subset) | `bit 8 (0x100)=CPU source; bits 10:9 (0x600)=pixel size 00=8b/01=16b/10=32b/11=mono; bit 12 (0x1000)=byte order; bit 1 (0x02)=force-pixel-transfer (combined with PIX_CNTL[7:6]); bit 3 (0x08)=Radial line draw; bits 7:5 (0xE0)=source select; bits 6,5 (0x40, 0x20)=x/y direction` | `vid_s3.c:607,650,654,8451,8589,8661,8781,8948-8970` | H (bits); M (full encoding) |
+| MULTIFUNC_CNTL layout | `[15:12]=index, [11:0]=data` | `vid_s3.c:s3_accel_out_fifo` | H |
+| MULTIFUNC[0x0A] (PIX_CNTL) | bits [7:6] used to enable forced-pixel-transfer when CMD[1] also set | `vid_s3.c:656` | M |
+| CRTC ext index for FIFO enable | `CR40` | `vid_s3.c:s3_enable_fifo` | M |
+| CRTC ext index for packed-MMIO / high-color | `CR53` | `vid_s3.c` | M |
+| **86Box emulator FIFO depth** | `FIFO_SIZE = 65536` — **emulator queue, NOT silicon** | `vid_s3.c:181` | H (as emulator detail) / U-4 silicon depth still OPEN |
 
 ### Accelerator register addresses (dual-address scheme)
 
