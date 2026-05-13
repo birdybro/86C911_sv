@@ -53,6 +53,8 @@ module tb_vga_regs;
   // ---- CRTC ----------------------------------------------------------------
   logic [7:0]  cr00,cr01,cr04,cr05,cr06,cr07,cr10,cr11,cr12,cr13,cr17,cr18;
   logic [15:0] cr0c0d;
+  logic [7:0]  cr31_w, cr38_w, cr39_w, cr40_w, cr53_w;
+  logic        ext_unlock_2x, ext_unlock_40, ext_unlock_36;
   logic [7:0]  crtc_array_w [0:31];
   s3_crtc u_crtc (
     .clk(clk), .rst_n(rst_n),
@@ -64,6 +66,12 @@ module tb_vga_regs;
     .cr12_vde_end(cr12), .cr0c0d_start_addr(cr0c0d),
     .cr13_offset(cr13), .cr17_mode_ctrl(cr17),
     .cr18_line_compare(cr18),
+    .cr31_mem_cfg(cr31_w), .cr38_lock1(cr38_w),
+    .cr39_lock2(cr39_w),   .cr40_sys_cfg(cr40_w),
+    .cr53_ext_ctrl(cr53_w),
+    .ext_unlocked_2x_3x (ext_unlock_2x),
+    .ext_unlocked_40plus(ext_unlock_40),
+    .ext_unlocked_cr36  (ext_unlock_36),
     .crtc_array(crtc_array_w)
   );
 

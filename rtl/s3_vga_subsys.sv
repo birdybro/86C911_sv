@@ -138,10 +138,12 @@ module s3_vga_subsys
     .eight_dot_clk (eight_dot_clk)
   );
 
-  // -- CRTC --
+  // -- CRTC + S3 extended register block --
   logic [7:0]  cr00, cr01, cr04, cr05, cr06, cr07;
   logic [7:0]  cr10, cr11, cr12, cr13, cr17, cr18;
   logic [15:0] cr0c0d;
+  logic [7:0]  cr31_mem_cfg, cr38_lock1, cr39_lock2, cr40_sys_cfg, cr53_ext_ctrl;
+  logic        ext_unlocked_2x_3x, ext_unlocked_40plus, ext_unlocked_cr36;
   logic [7:0]  crtc_array [0:31];
 
   s3_crtc u_crtc (
@@ -160,6 +162,14 @@ module s3_vga_subsys
     .cr13_offset      (cr13),
     .cr17_mode_ctrl   (cr17),
     .cr18_line_compare(cr18),
+    .cr31_mem_cfg     (cr31_mem_cfg),
+    .cr38_lock1       (cr38_lock1),
+    .cr39_lock2       (cr39_lock2),
+    .cr40_sys_cfg     (cr40_sys_cfg),
+    .cr53_ext_ctrl    (cr53_ext_ctrl),
+    .ext_unlocked_2x_3x (ext_unlocked_2x_3x),
+    .ext_unlocked_40plus(ext_unlocked_40plus),
+    .ext_unlocked_cr36  (ext_unlocked_cr36),
     .crtc_array       (crtc_array)
   );
 
