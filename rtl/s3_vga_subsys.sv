@@ -65,7 +65,7 @@ module s3_vga_subsys
   logic        decoded;
 
   // Per-slave responses
-  host_rsp_t rsp_general, rsp_seq, rsp_crtc, rsp_gfx, rsp_ac, rsp_dac;
+  host_rsp_t rsp_general, rsp_seq, rsp_crtc, rsp_gfx, rsp_ac, rsp_dac, rsp_vram;
 
   // ---------------------------------------------------------------------------
   // ISA pin shim + decode
@@ -227,15 +227,78 @@ module s3_vga_subsys
   );
 
   // ---------------------------------------------------------------------------
+  // VRAM subsystem (1 MB, 4 planes × 256 KB)
+  // ---------------------------------------------------------------------------
+  localparam int unsigned PLANE_AW = 18;     // 256 KB per plane
+
+  logic                vram_h_wr_en;
+  logic [3:0]          vram_h_wr_plane_mask;
+  logic [PLANE_AW-1:0] vram_h_wr_addr;
+  logic [7:0]          vram_h_wr_data_p0, vram_h_wr_data_p1, vram_h_wr_data_p2, vram_h_wr_data_p3;
+  logic [PLANE_AW-1:0] vram_h_rd_addr;
+  logic [7:0]          vram_h_rd_data_p0, vram_h_rd_data_p1, vram_h_rd_data_p2, vram_h_rd_data_p3;
+  logic [PLANE_AW-1:0] vram_s_rd_addr;
+  logic [7:0]          vram_s_rd_data_p0, vram_s_rd_data_p1, vram_s_rd_data_p2, vram_s_rd_data_p3;
+
+  s3_vga_mem_mapper #(.PLANE_AW(PLANE_AW)) u_mmap (
+    .clk(clk), .rst_n(rst_n),
+    .host_req(host_req), .target(target), .host_rsp(rsp_vram),
+    .sr_plane_mask  (plane_mask),
+    .sr_chain4      (chain4),
+    .sr_oddeven_dis (oddeven_dis),
+    .sr_extmem      (extmem),
+    .gr_read_map_sel(gr_read_map_sel),
+    .gr_write_mode  (gr_write_mode),
+    .gr_read_mode   (gr_read_mode),
+    .gr_mem_map_sel (gr_mem_map_sel),
+    .gr_bit_mask    (gr_bit_mask),
+    .gr_256mode     (gr_256mode),
+    .vram_wr_en        (vram_h_wr_en),
+    .vram_wr_plane_mask(vram_h_wr_plane_mask),
+    .vram_wr_addr      (vram_h_wr_addr),
+    .vram_wr_data_p0   (vram_h_wr_data_p0),
+    .vram_wr_data_p1   (vram_h_wr_data_p1),
+    .vram_wr_data_p2   (vram_h_wr_data_p2),
+    .vram_wr_data_p3   (vram_h_wr_data_p3),
+    .vram_rd_addr      (vram_h_rd_addr),
+    .vram_rd_data_p0   (vram_h_rd_data_p0),
+    .vram_rd_data_p1   (vram_h_rd_data_p1),
+    .vram_rd_data_p2   (vram_h_rd_data_p2),
+    .vram_rd_data_p3   (vram_h_rd_data_p3)
+  );
+
+  s3_vram_ctrl #(.PLANE_SIZE(1 << PLANE_AW)) u_vram (
+    .clk(clk), .rst_n(rst_n),
+    .h_wr_en        (vram_h_wr_en),
+    .h_wr_plane_mask(vram_h_wr_plane_mask),
+    .h_wr_addr      (vram_h_wr_addr),
+    .h_wr_data_p0   (vram_h_wr_data_p0),
+    .h_wr_data_p1   (vram_h_wr_data_p1),
+    .h_wr_data_p2   (vram_h_wr_data_p2),
+    .h_wr_data_p3   (vram_h_wr_data_p3),
+    .h_rd_addr      (vram_h_rd_addr),
+    .h_rd_data_p0   (vram_h_rd_data_p0),
+    .h_rd_data_p1   (vram_h_rd_data_p1),
+    .h_rd_data_p2   (vram_h_rd_data_p2),
+    .h_rd_data_p3   (vram_h_rd_data_p3),
+    .s_rd_addr      (vram_s_rd_addr),
+    .s_rd_data_p0   (vram_s_rd_data_p0),
+    .s_rd_data_p1   (vram_s_rd_data_p1),
+    .s_rd_data_p2   (vram_s_rd_data_p2),
+    .s_rd_data_p3   (vram_s_rd_data_p3)
+  );
+
+  // ---------------------------------------------------------------------------
   // Response OR-combine
   // ---------------------------------------------------------------------------
-  // At most one slave drives a non-zero rsp at any time (gated by target).
   always_comb begin
     host_rsp.ready = rsp_general.ready | rsp_seq.ready | rsp_crtc.ready
-                   | rsp_gfx.ready     | rsp_ac.ready  | rsp_dac.ready;
+                   | rsp_gfx.ready     | rsp_ac.ready  | rsp_dac.ready
+                   | rsp_vram.ready;
     host_rsp.err   = 1'b0;
     host_rsp.rdata = rsp_general.rdata | rsp_seq.rdata | rsp_crtc.rdata
-                   | rsp_gfx.rdata     | rsp_ac.rdata  | rsp_dac.rdata;
+                   | rsp_gfx.rdata     | rsp_ac.rdata  | rsp_dac.rdata
+                   | rsp_vram.rdata;
   end
 
   // ---------------------------------------------------------------------------
@@ -270,18 +333,38 @@ module s3_vga_subsys
   );
 
   // ---------------------------------------------------------------------------
-  // Pixel output — placeholder until s3_pixel_pipe lands in Phase 3
+  // Pixel pipeline (Phase 3a: chain-4 / mode 13h scanout)
   // ---------------------------------------------------------------------------
-  // No VRAM yet, so during active display the chip simply emits the overscan
-  // color through the DAC palette. Real planar / packed pixel scanout is
-  // Phase 3.
+  logic [7:0] pipe_scan_idx;
+
+  s3_pixel_pipe #(.PLANE_AW(PLANE_AW)) u_pipe (
+    .clk(clk), .rst_n(rst_n),
+    .enable        (misc_out[1]),
+    .display_enable(display_enable),
+    .char_x        (tg_char_x),
+    .line_y        (tg_line_y),
+    .sr_chain4     (chain4),
+    .eight_dot_clk (eight_dot_clk),
+    .gr_256mode    (gr_256mode),
+    .cr_start_addr (cr0c0d),
+    .cr_offset     (cr13),
+    .ar_overscan   (ar_overscan),
+    .s_rd_addr     (vram_s_rd_addr),
+    .s_rd_data_p0  (vram_s_rd_data_p0),
+    .s_rd_data_p1  (vram_s_rd_data_p1),
+    .s_rd_data_p2  (vram_s_rd_data_p2),
+    .s_rd_data_p3  (vram_s_rd_data_p3),
+    .scan_idx      (pipe_scan_idx)
+  );
+
+  // DAC scan port reads the index produced by the pipe, masked by the pixel
+  // mask register at 3C6.
+  assign scan_idx = pipe_scan_idx & pixel_mask;
+
+  // VGA pads
   assign vga_hsync = hsync_active;
   assign vga_vsync = vretrace_active;
   assign vga_blank = ~display_enable;
-
-  // Drive the DAC scan-port with the overscan palette index, masked by the
-  // pixel-mask register. ar_overscan is the 8-bit palette index (CR11 of AR).
-  assign scan_idx = ar_overscan & pixel_mask;
 
   // 6-bit DAC -> 8-bit RGB: replicate the top 2 bits into the LSBs.
   always_comb begin

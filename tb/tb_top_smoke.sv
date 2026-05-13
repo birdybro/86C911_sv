@@ -116,6 +116,19 @@ module tb_top_smoke;
     isa_outb(16'h03CF, data);
   endtask
 
+  task automatic isa_memw_b(input logic [23:0] addr, input logic [7:0] data);
+    @(negedge clk);
+    isa_sa     = addr[19:0];
+    isa_la     = addr[23:17];
+    isa_bhe_n  = addr[0] ? 1'b0 : 1'b1;
+    isa_sd_in  = addr[0] ? {data, 8'h00} : {8'h00, data};
+    isa_memw_n = 1'b0;
+    do @(negedge clk); while (isa_iochrdy != 1'b1);
+    isa_memw_n = 1'b1;
+    isa_bhe_n  = 1'b1;
+    @(negedge clk);
+  endtask
+
   task automatic chk(input string label, input logic [7:0] got, input logic [7:0] exp);
     if (got !== exp) begin
       $display("FAIL  %0s  got=%h exp=%h", label, got, exp);
@@ -125,11 +138,12 @@ module tb_top_smoke;
     end
   endtask
 
-  // ---- timing observation --------------------------------------------------
+  // ---- timing + pixel observation ----------------------------------------
   int unsigned hsync_pulses = 0;
   int unsigned vsync_pulses = 0;
   int unsigned de_pulses    = 0;
   logic        hsync_d, vsync_d, de_d;
+  logic        saw_red, saw_green;
 
   always_ff @(posedge clk) begin
     hsync_d <= vga_hsync;
@@ -138,6 +152,13 @@ module tb_top_smoke;
     if (vga_hsync && !hsync_d) hsync_pulses <= hsync_pulses + 1;
     if (vga_vsync && !vsync_d) vsync_pulses <= vsync_pulses + 1;
     if (~vga_blank && !de_d)   de_pulses    <= de_pulses    + 1;
+    if (~vga_blank && vga_r > 8'h80 && vga_g == 8'h00) saw_red   <= 1'b1;
+    if (~vga_blank && vga_g > 8'h80 && vga_r == 8'h00) saw_green <= 1'b1;
+  end
+
+  initial begin
+    saw_red   = 1'b0;
+    saw_green = 1'b0;
   end
 
   // ---- stimulus ------------------------------------------------------------
@@ -170,9 +191,13 @@ module tb_top_smoke;
     crtc_write(8'h11, 8'd5);
     crtc_write(8'h12, 8'd4);
 
-    // --- Graphics controller: mem map to A0000-AFFFF, gfx mode --------------
+    // --- Graphics controller: mem map A0000-AFFFF, 256-color mode, gfx mode -
+    gfx_write(8'h05, 8'h40);   // GR05[6]=1 → 256-color chain-4 path
     gfx_write(8'h06, 8'h05);
     gfx_write(8'h08, 8'hFF);   // bit mask all 1s
+
+    // --- Sequencer SR04: chain-4 enable -------------------------------------
+    seq_write(8'h04, 8'h0E);   // chain4 + odd/even disable + ext mem
 
     // --- DAC palette: entry 0 = (0x3F, 0x20, 0x10) ---------------------------
     isa_outb(16'h03C8, 8'h00);   // write index
@@ -182,6 +207,29 @@ module tb_top_smoke;
 
     // Pixel mask = 0xFF (default but exercise the path)
     isa_outb(16'h03C6, 8'hFF);
+
+    // --- Write a few known pixels into VRAM at A0000 ------------------------
+    // In chain-4 mode A0000+X maps to plane[X&3], offset[X>>2]. The pixel
+    // pipe walks linear pixel addresses starting at cr0c0d=0 (we never wrote
+    // CR0C/0D, so they default to 0). Active display window covers char_x
+    // 0..5 × 8 dots = pixel_x 0..47.
+    //   Pixel 0 -> palette index 1 (a deliberate non-default value)
+    //   Pixel 1 -> palette index 2
+    //   Pixel 2 -> palette index 1
+    //   Pixel 3 -> palette index 0
+    isa_memw_b(24'h0A_0000, 8'h01);
+    isa_memw_b(24'h0A_0001, 8'h02);
+    isa_memw_b(24'h0A_0002, 8'h01);
+    isa_memw_b(24'h0A_0003, 8'h00);
+
+    // Set palette[1] = (red, 0, 0), palette[2] = (0, green, 0)
+    isa_outb(16'h03C8, 8'h01);
+    isa_outb(16'h03C9, 8'h3F);  // R
+    isa_outb(16'h03C9, 8'h00);
+    isa_outb(16'h03C9, 8'h00);
+    isa_outb(16'h03C9, 8'h00);  // entry 2: R
+    isa_outb(16'h03C9, 8'h3F);  // G
+    isa_outb(16'h03C9, 8'h00);
 
     // --- Readback verification ----------------------------------------------
     begin
@@ -221,6 +269,16 @@ module tb_top_smoke;
       $display("FAIL  too few display_enable pulses: %0d (expected >= 8)", de_pulses);
       errors++;
     end else $display("ok    DE pulses observed = %0d", de_pulses);
+
+    if (!saw_red) begin
+      $display("FAIL  no red pixel observed (VRAM scanout?)");
+      errors++;
+    end else $display("ok    saw red pixel from palette[1]");
+
+    if (!saw_green) begin
+      $display("FAIL  no green pixel observed (VRAM scanout?)");
+      errors++;
+    end else $display("ok    saw green pixel from palette[2]");
 
     if (dbg_bus_timeout) begin
       $display("FAIL  unexpected bus timeout asserted");
