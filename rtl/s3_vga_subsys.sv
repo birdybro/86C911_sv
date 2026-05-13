@@ -65,7 +65,7 @@ module s3_vga_subsys
   logic        decoded;
 
   // Per-slave responses
-  host_rsp_t rsp_general, rsp_seq, rsp_crtc, rsp_gfx, rsp_ac, rsp_dac, rsp_vram;
+  host_rsp_t rsp_general, rsp_seq, rsp_crtc, rsp_gfx, rsp_ac, rsp_dac, rsp_vram, rsp_accel;
 
   // ---------------------------------------------------------------------------
   // ISA pin shim + decode
@@ -299,16 +299,57 @@ module s3_vga_subsys
   );
 
   // ---------------------------------------------------------------------------
+  // Accelerator register block (Phase 5: register file only — no engine yet)
+  // ---------------------------------------------------------------------------
+  logic [15:0] accel_cur_x, accel_cur_y, accel_cur_x2, accel_cur_y2;
+  logic [15:0] accel_desty_axstp, accel_destx_distp;
+  logic [15:0] accel_err_term, accel_maj_axis_pcnt;
+  logic [15:0] accel_cmd, accel_short_stroke;
+  logic [15:0] accel_bkgd_color, accel_frgd_color;
+  logic [15:0] accel_wrt_mask, accel_rd_mask, accel_color_cmp;
+  logic [15:0] accel_bkgd_mix, accel_frgd_mix;
+  logic [11:0] accel_multifunc [0:15];
+
+  // GE_BSY / FIFO bits will track real engine state in Phase 6. For Phase 5
+  // we expose static defaults: engine idle and FIFO empty.
+  s3_accel_regs u_accel (
+    .clk(clk), .rst_n(rst_n),
+    .host_req(host_req), .target(target), .host_rsp(rsp_accel),
+    .int_vsy      (vretrace_active),
+    .int_ge_bsy   (1'b0),
+    .int_fifo_ovr (1'b0),
+    .int_fifo_emp (1'b1),
+    .cur_x_q        (accel_cur_x),
+    .cur_y_q        (accel_cur_y),
+    .cur_x2_q       (accel_cur_x2),
+    .cur_y2_q       (accel_cur_y2),
+    .desty_axstp_q  (accel_desty_axstp),
+    .destx_distp_q  (accel_destx_distp),
+    .err_term_q     (accel_err_term),
+    .maj_axis_pcnt_q(accel_maj_axis_pcnt),
+    .cmd_q          (accel_cmd),
+    .short_stroke_q (accel_short_stroke),
+    .bkgd_color_q   (accel_bkgd_color),
+    .frgd_color_q   (accel_frgd_color),
+    .wrt_mask_q     (accel_wrt_mask),
+    .rd_mask_q      (accel_rd_mask),
+    .color_cmp_q    (accel_color_cmp),
+    .bkgd_mix_q     (accel_bkgd_mix),
+    .frgd_mix_q     (accel_frgd_mix),
+    .multifunc_q    (accel_multifunc)
+  );
+
+  // ---------------------------------------------------------------------------
   // Response OR-combine
   // ---------------------------------------------------------------------------
   always_comb begin
     host_rsp.ready = rsp_general.ready | rsp_seq.ready | rsp_crtc.ready
                    | rsp_gfx.ready     | rsp_ac.ready  | rsp_dac.ready
-                   | rsp_vram.ready;
+                   | rsp_vram.ready    | rsp_accel.ready;
     host_rsp.err   = 1'b0;
     host_rsp.rdata = rsp_general.rdata | rsp_seq.rdata | rsp_crtc.rdata
                    | rsp_gfx.rdata     | rsp_ac.rdata  | rsp_dac.rdata
-                   | rsp_vram.rdata;
+                   | rsp_vram.rdata    | rsp_accel.rdata;
   end
 
   // ---------------------------------------------------------------------------
