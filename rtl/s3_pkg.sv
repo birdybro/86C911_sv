@@ -116,6 +116,53 @@ package s3_pkg;
   localparam logic [15:0] PORT_CRTC_D_IDX   = 16'h03D4;
   localparam logic [15:0] PORT_CRTC_D_DATA  = 16'h03D5;
 
+  // ---------------------------------------------------------------------------
+  // Byte-access helpers for register slaves.
+  // Resolve ISA byte/word access against per-port byte addresses, handling:
+  //   - byte write to even port  (addr=even, be=01)
+  //   - byte write to odd port   (addr=odd,  be=10)
+  //   - word write to even pair  (addr=even, be=11)
+  // ---------------------------------------------------------------------------
+  function automatic logic wr_to(input host_req_t r, input logic [15:0] port);
+    logic [15:0] base = {r.addr[15:1], 1'b0};
+    return r.req && r.we && !r.is_mem && (
+      (port      == base    && r.be[0]) ||
+      ({port[15:1], 1'b0} == base && port[0] && r.be[1])
+    );
+  endfunction
+
+  function automatic logic rd_from(input host_req_t r, input logic [15:0] port);
+    logic [15:0] base = {r.addr[15:1], 1'b0};
+    return r.req && !r.we && !r.is_mem && (
+      (port      == base    && r.be[0]) ||
+      ({port[15:1], 1'b0} == base && port[0] && r.be[1])
+    );
+  endfunction
+
+  // Pick the byte from wdata that targets `port`.
+  function automatic logic [7:0] wr_byte(input host_req_t r, input logic [15:0] port);
+    return port[0] ? r.wdata[15:8] : r.wdata[7:0];
+  endfunction
+
+  // Build an rdata word from a (low_byte, high_byte) pair driven by a slave
+  // that owns an even-aligned port and the following odd-aligned port.
+  // The caller populates each slot with the byte the relevant *port* would
+  // return; this function gates each slot by the corresponding byte enable.
+  // - byte read at even port (be=01): rdata[7:0]  = byte_at_even
+  // - byte read at odd  port (be=10): rdata[15:8] = byte_at_odd
+  // - word read at even port (be=11): rdata[7:0]  = byte_at_even,
+  //                                   rdata[15:8] = byte_at_odd
+  function automatic logic [15:0] mk_rdata(
+      input host_req_t r,
+      input logic [7:0] byte_at_even,
+      input logic [7:0] byte_at_odd
+  );
+    logic [7:0] lo, hi;
+    lo = r.be[0] ? byte_at_even : 8'h00;
+    hi = r.be[1] ? byte_at_odd  : 8'h00;
+    return {hi, lo};
+  endfunction
+
 endpackage : s3_pkg
 
 `endif // S3_PKG_SV
